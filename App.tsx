@@ -12,11 +12,13 @@ import Expo2DContext from 'expo-2d-context';
 import { GLView } from 'expo-gl';
 import { PIXI } from 'expo-pixi';
 import * as MediaLibrary from 'expo-media-library';
+import { NativeModules } from "react-native";
+import {Picker} from "react-native";
 
 
 const io = require('socket.io-client');
 
-let endpoint = "http://263fac5df988.ngrok.io/";
+let endpoint = "http://ib.cedar.buffalo.edu:8888/";
 
 class App extends React.Component {
   camera: Camera;
@@ -24,6 +26,7 @@ class App extends React.Component {
   loader: any;
   videoTimer = 2;
   state = {
+    isAuthenticated: false,
     setStartCamera: false,
     setPreviewVisible: false,
     setCameraType: "back",
@@ -33,10 +36,12 @@ class App extends React.Component {
     serverImageReceived: false,
     savingStarted: false,
     serverVideoReceived: false,
-    setUsername: "",
-    setPassword: "",
+    setsessionid: "",
+    setpersonid: "",
     countDown: 0,
     startRecording: false,
+    setting: 1, // 1: outdoor, //2: indoor, //3: whitepaper
+    setsetting: "1",
     secondScreen: false,
     setCapturedVideoLeft: null,
     setCapturedVideoRight: null,
@@ -117,20 +122,42 @@ class App extends React.Component {
   }
 
   __startCamera = async () => {
+
+    fetch(endpoint + "api", {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ type: "Authenticate", sessionid: this.state.setsessionid, personid: this.state.setpersonid })
+    }).then(
+      response => response.json() // if the response is a JSON object
+    ).then(data => {
+      console.log (data)
+      if (data["type"] == "Authenticate" && data["status_code"] == 200) {
+        this.setState({ isAuthenticated: true })
+        this.cameraStart()
+      }
+      console.log(data)
+    });
+
+  }
+
+  cameraStart = async () => {
     const perm = await Permissions.askAsync(Permissions.CAMERA_ROLL);
-    if (perm.status != 'granted') {
-      console.log("Not granted")
-    }
-    const { status } = await Camera.requestPermissionsAsync()
-    let { permissions } = await Permissions.askAsync(Permissions.AUDIO_RECORDING);
-    console.log(status)
-    if (status === 'granted') {
-      this.setState({
-        setStartCamera: true
-      })
-    } else {
-      Alert.alert('Access denied')
-    }
+        if (perm.status != 'granted') {
+          console.log("Not granted")
+        }
+        const { status } = await Camera.requestPermissionsAsync()
+        let { permissions } = await Permissions.askAsync(Permissions.AUDIO_RECORDING);
+        console.log(status)
+        if (status === 'granted') {
+          this.setState({
+            setStartCamera: true
+          })
+        } else {
+          Alert.alert('Access denied')
+        }
   }
 
   recordVideo = async () => {
@@ -187,7 +214,7 @@ class App extends React.Component {
     if (this.state.setCapturedImageLeft != null && this.state.setCapturedImageRight != null) {
       try {
         const base64Image = await FileSystem.readAsStringAsync(this.state.setCapturedImageLeft.uri, { encoding: 'base64' });
-        this.webSocket.send(JSON.stringify({ photo: base64Image, type: "Picture_Left", username: this.state.setUsername })); 
+        this.webSocket.send(JSON.stringify({ photo: base64Image, type: "Picture_Left", sessionid: this.state.setsessionid, personid: this.state.setpersonid, setting: this.state.setsetting }));
         var byteArray = base64.toByteArray(base64Image)
         console.log("<<<<<<", byteArray.length);
 
@@ -211,8 +238,8 @@ class App extends React.Component {
         } catch (error) {
           console.log(error);
         }
-        
-       
+
+
         await FileSystem.moveAsync({
           from: this.state.setCapturedImageLeft.uri,
           to: FileSystem.documentDirectory + 'images/fingerprint_left.png'
@@ -227,7 +254,7 @@ class App extends React.Component {
       try {
         const base64 = await FileSystem.readAsStringAsync(this.state.setCapturedImageRight.uri, { encoding: 'base64' });
         console.log("Length: ", base64.length);
-        this.webSocket.send(JSON.stringify({ photo: base64, type: "Picture_Right", username: this.state.setUsername }));
+        this.webSocket.send(JSON.stringify({ photo: base64, type: "Picture_Right", sessionid: this.state.setsessionid, personid: this.state.setpersonid, setting: this.state.setsetting }));
         await FileSystem.moveAsync({
           from: this.state.setCapturedImageRight.uri,
           to: FileSystem.documentDirectory + 'images/fingerprint_right.png'
@@ -259,7 +286,6 @@ class App extends React.Component {
     }
   }
 
-
   __saveVideo = async () => {
     try {
       await FileSystem.makeDirectoryAsync(FileSystem.documentDirectory + 'video/')
@@ -280,7 +306,7 @@ class App extends React.Component {
             Accept: 'application/json',
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify({ photo: base64_send, type: "Video_Left", username: this.state.setUsername })
+          body: JSON.stringify({ photo: base64_send, type: "Video_Left", sessionid: this.state.setsessionid, personid: this.state.setpersonid, setting: this.state.setsetting })
         }).then(
           response => response.json() // if the response is a JSON object
         ).then(data => {
@@ -289,12 +315,13 @@ class App extends React.Component {
           if (data["type"] == "Video_Right") {
             this.setState({ serverVideoReceived: true })
           }
+          NativeModules.DevSettings.reload();
           console.log(data)
         });
 
 
         console.log("Length: ", base64_send.length, base64_send.substring(0, 100));
-        // this.webSocket.send(JSON.stringify({photo: base64_send, type: "Video_Left", username: this.state.setUsername}));
+        // this.webSocket.send(JSON.stringify({photo: base64_send, type: "Video_Left", sessionid: this.state.setsessionid}));
         await FileSystem.moveAsync({
           from: this.state.setCapturedVideoLeft.uri,
           to: FileSystem.documentDirectory + 'video/fingerprint_left.mp4'
@@ -316,14 +343,14 @@ class App extends React.Component {
             Accept: 'application/json',
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify({ photo: base64_send, type: "Video_Right", username: this.state.setUsername })
+          body: JSON.stringify({ photo: base64_send, type: "Video_Right", sessionid: this.state.setsessionid, personid: this.state.setpersonid, setting: this.state.setsetting })
         }).then(
           response => response.json() // if the response is a JSON object
         ).then(data => console.log(data));
 
 
         console.log("Length: ", base64_send.length);
-        // this.webSocket.send(JSON.stringify({photo: base64_send, type: "Video_Right", username: this.state.setUsername}));
+        // this.webSocket.send(JSON.stringify({photo: base64_send, type: "Video_Right", sessionid: this.state.setsessionid}));
         await FileSystem.moveAsync({
           from: this.state.setCapturedVideoRight.uri,
           to: FileSystem.documentDirectory + 'video/fingerprint_right.mp4'
@@ -358,7 +385,7 @@ class App extends React.Component {
     //     setFlashMode: 'off'
     //   })    
     // }
-    console.log(this.state.setFlashMode)
+    console.log("Set flash Mode", this.state.setFlashMode)
   }
 
   __switchCamera = () => {
@@ -395,7 +422,7 @@ class App extends React.Component {
             ) : (
               this.state.secondScreen ? (<Camera
                 type={this.state.setCameraType}
-                flashMode={this.state.setFlashMode}
+                flashMode={Camera.Constants.FlashMode.torch}
                 style={{ flex: 1 }}
                 focusDepth={1}
                 ref={(r) => {
@@ -525,7 +552,7 @@ class App extends React.Component {
               </Camera>) : (
                 <Camera
                   type={this.state.setCameraType}
-                  flashMode={this.state.setFlashMode}
+                  flashMode={Camera.Constants.FlashMode.torch}
                   style={{ flex: 1 }}
                   focusDepth={1}
                   ref={(r) => {
@@ -700,23 +727,51 @@ class App extends React.Component {
               <Text style={{ fontSize: 25 }}>Contactless Fingerprint</Text>
             </View>
             <View style={{ width: "100%", alignItems: "center" }}>
-              <TextInput placeholder="Passport number"
-                style={{
-                  height: 50, width: "80%",
-                  fontSize: 18, marginTop: "10%",
-                  paddingTop: 10, marginBottom: "0%", borderColor: '#bcbcbc',
-                  borderWidth: 1, paddingLeft: 15, paddingRight: 15, paddingBottom: 10
-                }}
-                onChangeText={username => this.setState({ setUsername: username })} />
 
-              <TextInput secureTextEntry={true} placeholder="Password"
+            <Text style={{
+                height: 50, width: "80%",
+                fontSize: 15, marginTop: "5%",
+                paddingTop: 10, marginBottom: "0%", paddingLeft: 15, paddingRight: 15}}>Session ID</Text>
+
+              <TextInput placeholder="Session ID"
                 style={{
                   height: 50, width: "80%",
-                  fontSize: 18, marginTop: "5%",
+                  fontSize: 18, marginTop: -10,
                   paddingTop: 10, marginBottom: "0%", borderColor: '#bcbcbc',
                   borderWidth: 1, paddingLeft: 15, paddingRight: 15, paddingBottom: 10
                 }}
-                onChangeText={password => this.setState({ setPassword: password })} />
+                onChangeText={sessionid => this.setState({ setsessionid: sessionid })} />
+
+              <Text style={{
+                height: 50, width: "80%",
+                fontSize: 15, marginTop: "5%",
+                paddingTop: 10, marginBottom: "0%", paddingLeft: 15, paddingRight: 15}}>Person ID</Text>
+
+              <TextInput placeholder="Person ID" //secureTextEntry={true}
+                style={{
+                  height: 50, width: "80%",
+                  fontSize: 18, marginTop: -10,
+                  paddingTop: 10, marginBottom: "0%", borderColor: '#bcbcbc',
+                  borderWidth: 1, paddingLeft: 15, paddingRight: 15, paddingBottom: 10
+                }}
+                onChangeText={personid => this.setState({ setpersonid: personid })} />
+
+             
+                <View>
+
+<Text style={{
+                height: 50, width: "80%",
+                fontSize: 15, marginTop: "5%",
+                paddingTop: 10, marginBottom: "0%", paddingLeft: 15, paddingRight: 15}}>Background</Text>
+
+<Picker selectedValue={this.state.setsetting} onValueChange={(itemValue, itemIndex) => this.setState({ setsetting: itemValue })}>
+  <Picker.Item label="Indoor" value="1" />
+              <Picker.Item label="Outdoor" value="2" />
+              <Picker.Item label="White Background" value="3" />
+</Picker>
+
+</View>
+               
             </View>
             <View style={{
               flex: 1,
